@@ -1,12 +1,13 @@
 #!/usr/bin/env Rscript
 
 OryzabaseGeneListEnURL <- "https://shigen.nig.ac.jp/rice/oryzabase/gene/download?classtag=GENE_EN_LIST"
+script_version <- "0.1.0"
 
 parse_arguments <- function() {
 
     raw_args <- commandArgs(trailingOnly = TRUE)
 
-    help_message = sprintf("version: 0.1.0
+    help_message = sprintf("version: %s
 author: Pan Yongqing
 
 usage: make_oryzabase_go_table.R [-h] [-o OUT_PATH]
@@ -24,9 +25,8 @@ options:
 
 dependencies:
   - bioconductor-go.db
-  - r-readr
   - r-tidyr
-", OryzabaseGeneListEnURL)
+", version, OryzabaseGeneListEnURL)
 
     args_list <- list()
     option2variable <- c(
@@ -68,13 +68,25 @@ dependencies:
 
 args_list <- parse_arguments()
 
+# Download anno from Oryzabase
 cat("Downloading annotation data from Oryzabase ... ")
-OryzabaseGeneListEn <- suppressMessages(readr::read_tsv(OryzabaseGeneListEnURL))
+OryzabaseGeneListEn <- suppressMessages(
+    read.delim(
+        url(OryzabaseGeneListEnURL),
+        sep="\t",
+        check.names=F,
+        na.strings=""
+    )
+)
 cat("DONE\n")
 
 cat("Data wrangling ... ")
 # Extract RAPID and GeneOntology from original big table
 rapid2go <- setNames(OryzabaseGeneListEn[c("RAP ID", "Gene Ontology")], c("RAPID", "GeneOntology"))
+
+# Trim whitespaces
+rapid2go[["RAPID"]] <- trimws(rapid2go[["RAPID"]])
+rapid2go[["GeneOntology"]] <- trimws(rapid2go[["GeneOntology"]])
 rapid2go <- subset(rapid2go, !is.na(RAPID) & !is.na(GeneOntology))
 
 # Split one row to multiple rows by GO terms
@@ -108,7 +120,7 @@ counter <- 0
 for (gene in names(rapid2go_splitted_by_gene)) {
     # Progress scroll
     counter <- counter + 1
-    cat(sprintf("Finding ancestor GO ID: %s/%s ...\r", counter, total_gene_number))
+    cat(sprintf("Finding ancestor GO IDs: %s/%s ...\r", counter, total_gene_number))
 
     # Subset GO ID in BP
     rapid2go_per_gene <- rapid2go_splitted_by_gene[[gene]]
@@ -126,13 +138,26 @@ for (gene in names(rapid2go_splitted_by_gene)) {
     names(all_bp_go_id) <- NULL
     all_gene2go_bp[[gene]] <- data.frame(RAPID=gene, GOID=all_bp_go_id)
 }
-cat(sprintf("Finding ancestor GO ID: %s/%s ... DNOE\n", counter, total_gene_number))
+cat(sprintf("Finding ancestor GO IDs: %s/%s ... DNOE\n", counter, total_gene_number))
 
-# Combine, fill-in GO term and export
+# Combine every gene's table and fill-in GO terms.
 cat(sprintf("Exporting table to \"%s\" ... ", args_list[["out_path"]]))
 all_gene2go_bp <- do.call(rbind, all_gene2go_bp)
 all_gene2go_bp[["GOTERM"]] <- suppressMessages(
     AnnotationDbi::select(GO.db::GO.db, keys=all_gene2go_bp[["GOID"]], columns="TERM")[["TERM"]]
 )
-readr::write_csv(all_gene2go_bp, args_list[["out_path"]])
+
+# Export to a csv with a comment of version.
+# NOTE: write_csv() can only write to a binary connection.
+con <- file(args_list[["out_path"]], open="wt")
+writeLines(
+    c(
+        "# make_oryzabase_go_table.R",
+        sprintf("# version: %s", script_version),
+        sprintf("# date: %s", Sys.time())
+    ),
+    con
+)
+write.csv(all_gene2go_bp, con, row.names=F)
+close(con)
 cat("DONE\n")
